@@ -5,7 +5,7 @@ Dùng với [Super Google AI Assistant](https://chrome.google.com/webstore) Chro
 
 ## ⚡ Deploy 1-Click
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/zalo-server?referralCode=YOUR_CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/thriving-victory)
 
 > Nhấn nút trên → Đăng nhập Railway → Deploy → Copy URL → Paste vào Extension
 
