@@ -1,0 +1,19 @@
+{
+  "name": "zalo-server",
+  "version": "1.0.0",
+  "description": "Multi-tenant Zalo backend — mỗi user login Zalo riêng qua QR",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "zca-js": "^2.1.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
