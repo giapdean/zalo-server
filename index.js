@@ -9,6 +9,8 @@ import { authMiddleware } from './src/middleware/auth.js';
 import authRoutes from './src/routes/auth.js';
 import messageRoutes from './src/routes/message.js';
 import contactRoutes from './src/routes/contact.js';
+import groupRoutes from './src/routes/group.js';
+import utilityRoutes from './src/routes/utility.js';
 
 const app = express();
 const PORT = process.env.PORT || 3456;
@@ -22,7 +24,7 @@ app.get('/', (req, res) => {
   const stats = sessionManager.getStats();
   res.json({
     name: 'Zalo Server',
-    version: '1.0.0',
+    version: '2.0.0',
     status: 'running',
     ...stats
   });
@@ -36,6 +38,8 @@ app.get('/health', (req, res) => {
 app.use('/zalo', authMiddleware, authRoutes);
 app.use('/zalo', authMiddleware, messageRoutes);
 app.use('/zalo', authMiddleware, contactRoutes);
+app.use('/zalo', authMiddleware, groupRoutes);
+app.use('/zalo', authMiddleware, utilityRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {
