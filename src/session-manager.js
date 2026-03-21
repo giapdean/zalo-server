@@ -99,6 +99,9 @@ class SessionManager {
       recentMessages: [], connectedAt: null
     });
 
+    // Capture credentials from callback before loginQR might throw
+    let capturedCredentials = null;
+
     try {
       const zalo = new Zalo();
       const qrDir = join(SESSIONS_DIR, 'qr');
@@ -114,6 +117,11 @@ class SessionManager {
           console.log(`[Sessions] 📱 QR Event: type=${event.type}`);
           if (event.type === 2) {
             console.log(`[Sessions] 📱 QR Scanned by: ${event.data?.display_name || 'unknown'}`);
+          }
+          // Type 4 = GotLoginInfo — capture cookies BEFORE potential failure
+          if (event.type === 4 && event.data) {
+            capturedCredentials = event.data;
+            console.log(`[Sessions] 🔑 Captured login credentials for: ${email}`);
           }
         }
       });
@@ -133,13 +141,39 @@ class SessionManager {
     } catch (e) {
       console.error(`[Sessions] ❌ Login error: ${email}: ${e.message}`);
 
+      // If we captured credentials, try to login with cookies directly
+      if (capturedCredentials && (e.message === "Can't login" || e.message === "Can't get account info")) {
+        console.log(`[Sessions] 🔄 Retrying with captured credentials for: ${email}`);
+        try {
+          const zalo2 = new Zalo();
+          const api = await zalo2.login(capturedCredentials);
+          
+          this.sessions.set(email, {
+            api, zalo: zalo2, status: 'connected',
+            recentMessages: [], connectedAt: Date.now()
+          });
+          console.log(`[Sessions] 🟢 Retry login SUCCESS for: ${email}`);
+
+          // Save credentials for future restores
+          const cookiePath = this._getSessionPath(email);
+          await writeFile(cookiePath, JSON.stringify(capturedCredentials), 'utf-8').catch(() => {});
+          
+          try { this._setupListener(email); } catch (e2) { console.warn(`[Sessions] ⚠️ Listener: ${e2.message}`); }
+
+          return { success: true, message: 'Đăng nhập Zalo thành công!' };
+        } catch (e2) {
+          console.error(`[Sessions] ❌ Retry login also failed: ${e2.message}`);
+          // Fall through to limited
+        }
+      }
+
       if (e.message === "Can't login" || e.message === "Can't get account info") {
         console.warn(`[Sessions] ⚠️ Limited connected for: ${email}`);
         this.sessions.set(email, {
           api: null, zalo: null, status: 'limited',
           recentMessages: [], connectedAt: Date.now(), limited: true
         });
-        return { success: true, message: 'Đăng nhập Zalo thành công (API hạn chế — Railway IP bị chặn)!', limited: true };
+        return { success: true, message: 'Đăng nhập Zalo hạn chế (Railway IP bị chặn).', limited: true };
       }
 
       this.sessions.set(email, {
