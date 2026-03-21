@@ -75,7 +75,9 @@ class SessionManager {
   // Helper: lấy api object hoặc throw
   _getApi(email) {
     const session = this.sessions.get(email);
-    if (!session?.api) throw new Error('Chưa đăng nhập Zalo');
+    if (!session) throw new Error('Chưa đăng nhập Zalo');
+    if (session.status === 'limited') throw new Error('Zalo đang kết nối hạn chế (Railway IP bị chặn). Hãy chạy server trên VPS hoặc local.');
+    if (!session.api) throw new Error('Chưa đăng nhập Zalo');
     return session.api;
   }
 
@@ -134,10 +136,10 @@ class SessionManager {
       if (e.message === "Can't login" || e.message === "Can't get account info") {
         console.warn(`[Sessions] ⚠️ Limited connected for: ${email}`);
         this.sessions.set(email, {
-          api: null, zalo: null, status: 'connected',
+          api: null, zalo: null, status: 'limited',
           recentMessages: [], connectedAt: Date.now(), limited: true
         });
-        return { success: true, message: 'Đăng nhập Zalo thành công (API hạn chế)!' };
+        return { success: true, message: 'Đăng nhập Zalo thành công (API hạn chế — Railway IP bị chặn)!', limited: true };
       }
 
       this.sessions.set(email, {
