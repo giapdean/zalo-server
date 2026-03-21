@@ -1,23 +1,149 @@
 // ============================================================
 // Session Manager — Multi-tenant: 1 Zalo session per user email
-// Supports ALL zca-js APIs
+// Supports ALL zca-js APIs + Auto-rotate Proxy for cloud hosting
 // ============================================================
 import { Zalo, ThreadType } from 'zca-js';
 import { readFile, writeFile, mkdir, unlink, readdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = join(__dirname, '..', 'sessions');
 
+// Proxifly free VN proxy list
+const PROXIFLY_VN_URL = 'https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/VN/data.json';
+
 class SessionManager {
   constructor() {
-    this.sessions = new Map(); // email → { api, zalo, status, recentMessages }
-    this.loginGenerations = new Map(); // email → number — track login generation to invalidate old processes
+    this.sessions = new Map();
+    this.loginGenerations = new Map();
+
+    // Proxy state
+    this.proxyAgent = null;
+    this.proxyList = [];
+    this.currentProxyIndex = -1;
+    this.proxyMode = 'none'; // 'fixed' | 'auto' | 'none'
+  }
+
+  // Gọi sau constructor — init proxy + restore sessions
+  async init() {
+    await this._initProxy();
+    await this._restoreAllSessions();
+  }
+
+  // ============================================================
+  // PROXY SYSTEM
+  // ============================================================
+  async _initProxy() {
+    const fixedProxy = process.env.ZALO_PROXY_URL;
+
+    if (fixedProxy) {
+      // Mode 1: Fixed proxy từ env var
+      this.proxyAgent = this._createAgent(fixedProxy);
+      this.proxyMode = 'fixed';
+      console.log(`[Proxy] 🌐 Fixed proxy: ${fixedProxy.replace(/\/\/.*@/, '//***@')}`);
+    } else {
+      // Mode 2: Auto-fetch free VN proxies
+      console.log('[Proxy] 🔄 No ZALO_PROXY_URL set → fetching free VN proxies...');
+      await this._fetchProxyList();
+
+      if (this.proxyList.length > 0) {
+        await this._rotateToNextProxy();
+        this.proxyMode = 'auto';
+
+        // Refresh list mỗi 30 phút
+        setInterval(() => this._fetchProxyList(), 30 * 60 * 1000);
+      } else {
+        console.log('[Proxy] ⚠️ No free VN proxies found. Running without proxy.');
+        this.proxyMode = 'none';
+      }
+    }
+  }
+
+  _createAgent(proxyUrl) {
+    if (proxyUrl.startsWith('socks')) {
+      return new SocksProxyAgent(proxyUrl);
+    }
+    return new HttpsProxyAgent(proxyUrl);
+  }
+
+  async _fetchProxyList() {
+    try {
+      const res = await fetch(PROXIFLY_VN_URL);
+      const data = await res.json();
+      // Ưu tiên HTTP > SOCKS5, score cao
+      this.proxyList = data
+        .sort((a, b) => {
+          if (a.protocol === 'http' && b.protocol !== 'http') return -1;
+          if (a.protocol !== 'http' && b.protocol === 'http') return 1;
+          return (b.score || 0) - (a.score || 0);
+        });
+      console.log(`[Proxy] 📋 Fetched ${this.proxyList.length} VN proxies (${data.filter(p => p.protocol === 'http').length} HTTP, ${data.filter(p => p.protocol === 'socks5').length} SOCKS5)`);
+    } catch (e) {
+      console.warn(`[Proxy] ❌ Failed to fetch proxy list: ${e.message}`);
+    }
+  }
+
+  async _testProxy(proxyUrl) {
+    try {
+      const agent = this._createAgent(proxyUrl);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const res = await fetch('https://httpbin.org/ip', {
+        agent,
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[Proxy] ✅ Proxy works! IP: ${data.origin}`);
+        return true;
+      }
+    } catch (e) {
+      // Proxy failed
+    }
+    return false;
+  }
+
+  async _rotateToNextProxy() {
+    const maxTries = Math.min(this.proxyList.length, 5); // Test tối đa 5 proxy
+
+    for (let i = 0; i < maxTries; i++) {
+      this.currentProxyIndex = (this.currentProxyIndex + 1) % this.proxyList.length;
+      const proxy = this.proxyList[this.currentProxyIndex];
+      const proxyUrl = proxy.proxy;
+
+      console.log(`[Proxy] 🔄 Testing proxy ${i + 1}/${maxTries}: ${proxyUrl}`);
+
+      if (await this._testProxy(proxyUrl)) {
+        this.proxyAgent = this._createAgent(proxyUrl);
+        console.log(`[Proxy] 🟢 Using: ${proxyUrl}`);
+        return true;
+      } else {
+        console.log(`[Proxy] ❌ Dead: ${proxyUrl}`);
+      }
+    }
+
+    console.log('[Proxy] ⚠️ All tested proxies dead. Running without proxy.');
+    this.proxyAgent = null;
+    return false;
+  }
+
+  // Helper: tạo Zalo instance với proxy (nếu có)
+  _createZalo(extraOpts = {}) {
+    const opts = { ...extraOpts };
+    if (this.proxyAgent) {
+      opts.agent = this.proxyAgent;
+    }
+    return new Zalo(opts);
   }
 
   // Khởi tạo: restore tất cả sessions đã lưu
-  async init() {
+  async _restoreAllSessions() {
     await mkdir(SESSIONS_DIR, { recursive: true }).catch(() => {});
 
     try {
@@ -50,7 +176,7 @@ class SessionManager {
     const data = await readFile(cookiePath, 'utf-8');
     const cookies = JSON.parse(data);
 
-    const zalo = new Zalo({ cookie: cookies });
+    const zalo = this._createZalo({ cookie: cookies });
     const api = await zalo.login();
 
     this.sessions.set(email, {
@@ -108,7 +234,7 @@ class SessionManager {
     let capturedCredentials = null;
 
     try {
-      const zalo = new Zalo();
+      const zalo = this._createZalo();
       const qrDir = join(SESSIONS_DIR, 'qr');
       await mkdir(qrDir, { recursive: true }).catch(() => {});
       const safeEmail = email.replace(/\./g, '_').replace(/@/g, '_at_');
@@ -161,7 +287,7 @@ class SessionManager {
       if (capturedCredentials && (e.message === "Can't login" || e.message === "Can't get account info")) {
         console.log(`[Sessions] 🔄 Retrying with captured credentials for: ${email}`);
         try {
-          const zalo2 = new Zalo();
+          const zalo2 = this._createZalo();
           const api = await zalo2.login(capturedCredentials);
           
           this.sessions.set(email, {
@@ -512,7 +638,13 @@ class SessionManager {
     return {
       totalSessions: this.sessions.size,
       connected: [...this.sessions.values()].filter(s => s.status === 'connected').length,
-      pending: [...this.sessions.values()].filter(s => s.status === 'pending_qr').length
+      pending: [...this.sessions.values()].filter(s => s.status === 'pending_qr').length,
+      proxy: {
+        mode: this.proxyMode,
+        active: !!this.proxyAgent,
+        current: this.currentProxyIndex >= 0 ? this.proxyList[this.currentProxyIndex]?.proxy : null,
+        available: this.proxyList.length
+      }
     };
   }
 }

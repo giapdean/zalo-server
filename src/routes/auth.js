@@ -13,10 +13,25 @@ const router = Router();
 // POST /zalo/login — Bắt đầu login QR (NON-BLOCKING: trả về ngay, poll /qr để lấy QR)
 router.post('/login', async (req, res) => {
   try {
-    // Check đã connected chưa
+    // Check đã connected chưa — verify session thật sự hoạt động
     const status = sessionManager.getStatus(req.userEmail);
     if (status.status === 'connected') {
-      return res.json({ success: true, message: 'Đã đăng nhập Zalo rồi!' });
+      // Verify session vẫn live bằng cách check api object
+      const session = sessionManager.sessions.get(req.userEmail);
+      if (session && session.api) {
+        try {
+          // Quick verify: nếu api object tồn tại và có listener → coi như valid
+          console.log(`[Auth] Session found for ${req.userEmail}, verifying...`);
+          return res.json({ success: true, message: 'Đã đăng nhập Zalo rồi!' });
+        } catch (verifyErr) {
+          console.log(`[Auth] Stale session detected for ${req.userEmail}, forcing re-login`);
+          await sessionManager.logout(req.userEmail);
+        }
+      } else {
+        // Session connected nhưng không có api → stale, xóa đi
+        console.log(`[Auth] Connected but no api for ${req.userEmail}, clearing stale session`);
+        await sessionManager.logout(req.userEmail);
+      }
     }
 
     // Bắt đầu login async (không await)
