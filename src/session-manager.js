@@ -1,6 +1,6 @@
 // ============================================================
 // Session Manager — Multi-tenant: 1 Zalo session per user email
-// Supports ALL zca-js APIs + Auto-rotate Proxy for cloud hosting
+// 2 modes: Railway+Proxy hoặc Local (IP nhà mạng)
 // ============================================================
 import { Zalo, ThreadType } from 'zca-js';
 import { readFile, writeFile, mkdir, unlink, readdir } from 'fs/promises';
@@ -12,125 +12,28 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = join(__dirname, '..', 'sessions');
 
-// Proxifly free VN proxy list
-const PROXIFLY_VN_URL = 'https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/VN/data.json';
-
 class SessionManager {
   constructor() {
     this.sessions = new Map();
     this.loginGenerations = new Map();
-
-    // Proxy state
     this.proxyAgent = null;
-    this.proxyList = [];
-    this.currentProxyIndex = -1;
-    this.proxyMode = 'none'; // 'fixed' | 'auto' | 'none'
   }
 
   // Gọi sau constructor — init proxy + restore sessions
   async init() {
-    await this._initProxy();
-    await this._restoreAllSessions();
-  }
-
-  // ============================================================
-  // PROXY SYSTEM
-  // ============================================================
-  async _initProxy() {
-    const fixedProxy = process.env.ZALO_PROXY_URL;
-
-    if (fixedProxy) {
-      // Mode 1: Fixed proxy từ env var
-      this.proxyAgent = this._createAgent(fixedProxy);
-      this.proxyMode = 'fixed';
-      console.log(`[Proxy] 🌐 Fixed proxy: ${fixedProxy.replace(/\/\/.*@/, '//***@')}`);
+    // Mode 1: Railway + Proxy (set ZALO_PROXY_URL env var)
+    // Mode 2: Local (không set → dùng IP nhà mạng trực tiếp)
+    const proxyUrl = process.env.ZALO_PROXY_URL;
+    if (proxyUrl) {
+      this.proxyAgent = proxyUrl.startsWith('socks')
+        ? new SocksProxyAgent(proxyUrl)
+        : new HttpsProxyAgent(proxyUrl);
+      console.log(`[Proxy] 🌐 Railway mode — Proxy: ${proxyUrl.replace(/\/\/.*@/, '//***@')}`);
     } else {
-      // Mode 2: Auto-fetch free VN proxies
-      console.log('[Proxy] 🔄 No ZALO_PROXY_URL set → fetching free VN proxies...');
-      await this._fetchProxyList();
-
-      if (this.proxyList.length > 0) {
-        await this._rotateToNextProxy();
-        this.proxyMode = 'auto';
-
-        // Refresh list mỗi 30 phút
-        setInterval(() => this._fetchProxyList(), 30 * 60 * 1000);
-      } else {
-        console.log('[Proxy] ⚠️ No free VN proxies found. Running without proxy.');
-        this.proxyMode = 'none';
-      }
-    }
-  }
-
-  _createAgent(proxyUrl) {
-    if (proxyUrl.startsWith('socks')) {
-      return new SocksProxyAgent(proxyUrl);
-    }
-    return new HttpsProxyAgent(proxyUrl);
-  }
-
-  async _fetchProxyList() {
-    try {
-      const res = await fetch(PROXIFLY_VN_URL);
-      const data = await res.json();
-      // Ưu tiên HTTP > SOCKS5, score cao
-      this.proxyList = data
-        .sort((a, b) => {
-          if (a.protocol === 'http' && b.protocol !== 'http') return -1;
-          if (a.protocol !== 'http' && b.protocol === 'http') return 1;
-          return (b.score || 0) - (a.score || 0);
-        });
-      console.log(`[Proxy] 📋 Fetched ${this.proxyList.length} VN proxies (${data.filter(p => p.protocol === 'http').length} HTTP, ${data.filter(p => p.protocol === 'socks5').length} SOCKS5)`);
-    } catch (e) {
-      console.warn(`[Proxy] ❌ Failed to fetch proxy list: ${e.message}`);
-    }
-  }
-
-  async _testProxy(proxyUrl) {
-    try {
-      const agent = this._createAgent(proxyUrl);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-
-      const res = await fetch('https://httpbin.org/ip', {
-        agent,
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-
-      if (res.ok) {
-        const data = await res.json();
-        console.log(`[Proxy] ✅ Proxy works! IP: ${data.origin}`);
-        return true;
-      }
-    } catch (e) {
-      // Proxy failed
-    }
-    return false;
-  }
-
-  async _rotateToNextProxy() {
-    const maxTries = Math.min(this.proxyList.length, 5); // Test tối đa 5 proxy
-
-    for (let i = 0; i < maxTries; i++) {
-      this.currentProxyIndex = (this.currentProxyIndex + 1) % this.proxyList.length;
-      const proxy = this.proxyList[this.currentProxyIndex];
-      const proxyUrl = proxy.proxy;
-
-      console.log(`[Proxy] 🔄 Testing proxy ${i + 1}/${maxTries}: ${proxyUrl}`);
-
-      if (await this._testProxy(proxyUrl)) {
-        this.proxyAgent = this._createAgent(proxyUrl);
-        console.log(`[Proxy] 🟢 Using: ${proxyUrl}`);
-        return true;
-      } else {
-        console.log(`[Proxy] ❌ Dead: ${proxyUrl}`);
-      }
+      console.log('[Proxy] 🏠 Local mode — dùng IP nhà mạng (không cần proxy)');
     }
 
-    console.log('[Proxy] ⚠️ All tested proxies dead. Running without proxy.');
-    this.proxyAgent = null;
-    return false;
+    await this._restoreAllSessions();
   }
 
   // Helper: tạo Zalo instance với proxy (nếu có)
