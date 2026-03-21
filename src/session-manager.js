@@ -103,9 +103,11 @@ class SessionManager {
       const safeEmail = email.replace(/\./g, '_').replace(/@/g, '_at_');
       const qrPath = join(qrDir, `${safeEmail}.png`);
 
+      console.log(`[Sessions] ⏳ Waiting for QR scan: ${email}`);
       const api = await zalo.loginQR({ qrPath });
+      console.log(`[Sessions] ✅ loginQR() returned for: ${email}`);
 
-      // Login thành công
+      // Set connected NGAY LẬP TỨC — trước khi save cookies / setup listener
       this.sessions.set(email, {
         api,
         zalo,
@@ -113,12 +115,27 @@ class SessionManager {
         recentMessages: [],
         connectedAt: Date.now()
       });
+      console.log(`[Sessions] 🟢 Status set to connected: ${email}`);
 
-      await this._saveCookies(email, api);
-      this._setupListener(email);
+      // Save cookies (non-critical — don't let failure reset status)
+      try {
+        await this._saveCookies(email, api);
+        console.log(`[Sessions] 💾 Cookies saved: ${email}`);
+      } catch (cookieErr) {
+        console.warn(`[Sessions] ⚠️ Cookie save failed (non-critical): ${cookieErr.message}`);
+      }
+
+      // Setup listener (non-critical)
+      try {
+        this._setupListener(email);
+        console.log(`[Sessions] 👂 Listener started: ${email}`);
+      } catch (listErr) {
+        console.warn(`[Sessions] ⚠️ Listener setup failed (non-critical): ${listErr.message}`);
+      }
 
       return { success: true, message: 'Đăng nhập Zalo thành công!' };
     } catch (e) {
+      console.error(`[Sessions] ❌ Login failed: ${email}: ${e.message}`);
       this.sessions.set(email, {
         api: null,
         zalo: null,
