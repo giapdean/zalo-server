@@ -115,6 +115,11 @@ class SessionManager {
         qrPath,
         callback: (event) => {
           console.log(`[Sessions] 📱 QR Event: type=${event.type}`);
+          // Type 0 = QRCodeGenerated — MUST save to file since callback mode doesn't auto-save
+          if (event.type === 0 && event.actions?.saveToFile) {
+            event.actions.saveToFile(qrPath);
+            console.log(`[Sessions] 💾 QR saved to: ${qrPath}`);
+          }
           if (event.type === 2) {
             console.log(`[Sessions] 📱 QR Scanned by: ${event.data?.display_name || 'unknown'}`);
           }
