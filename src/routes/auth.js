@@ -1,5 +1,5 @@
 // ============================================================
-// Auth Routes — Login QR, Status, Logout
+// Auth Routes — Login QR (non-blocking), Status, Logout
 // ============================================================
 import { Router } from 'express';
 import { sessionManager } from '../session-manager.js';
@@ -10,11 +10,24 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const router = Router();
 
-// POST /zalo/login — Bắt đầu login QR (blocking cho đến khi quét xong)
+// POST /zalo/login — Bắt đầu login QR (NON-BLOCKING: trả về ngay, poll /qr để lấy QR)
 router.post('/login', async (req, res) => {
   try {
-    const result = await sessionManager.startLoginQR(req.userEmail);
-    res.json(result);
+    // Check đã connected chưa
+    const status = sessionManager.getStatus(req.userEmail);
+    if (status.status === 'connected') {
+      return res.json({ success: true, message: 'Đã đăng nhập Zalo rồi!' });
+    }
+
+    // Bắt đầu login async (không await)
+    sessionManager.startLoginQR(req.userEmail).then(result => {
+      console.log(`[Auth] Login result for ${req.userEmail}:`, result);
+    }).catch(err => {
+      console.error(`[Auth] Login error for ${req.userEmail}:`, err.message);
+    });
+
+    // Trả về ngay, client sẽ poll /qr
+    res.json({ success: true, message: 'Đang tạo QR... Poll GET /zalo/qr để lấy mã.', pending: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -38,7 +51,8 @@ router.get('/qr', async (req, res) => {
       qr_base64: `data:image/png;base64,${base64}`
     });
   } catch (e) {
-    res.json({ success: false, error: 'QR chưa sẵn sàng. Gọi POST /zalo/login trước.' });
+    // QR chưa sẵn sàng — client cần poll lại
+    res.json({ success: false, pending: true, error: 'QR đang được tạo, thử lại sau 2-3 giây...' });
   }
 });
 
