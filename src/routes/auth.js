@@ -81,4 +81,34 @@ router.post('/logout', async (req, res) => {
   }
 });
 
+// POST /zalo/proxy — Set proxy URL
+router.post('/proxy', async (req, res) => {
+  try {
+    const { proxyUrl } = req.body;
+    if (!proxyUrl) {
+      const result = await sessionManager.clearProxy();
+      return res.json(result);
+    }
+    const result = await sessionManager.setProxy(proxyUrl);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// DELETE /zalo/proxy — Clear proxy
+router.delete('/proxy', async (req, res) => {
+  try {
+    const result = await sessionManager.clearProxy();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /zalo/proxy — Get proxy info
+router.get('/proxy', (req, res) => {
+  res.json({ success: true, ...sessionManager.getProxyInfo() });
+});
+
 export default router;

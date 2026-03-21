@@ -21,8 +21,7 @@ class SessionManager {
 
   // Gọi sau constructor — init proxy + restore sessions
   async init() {
-    // Mode 1: Railway + Proxy (set ZALO_PROXY_URL env var)
-    // Mode 2: Local (không set → dùng IP nhà mạng trực tiếp)
+    // Priority: ENV var > saved config file > none
     const proxyUrl = process.env.ZALO_PROXY_URL;
     if (proxyUrl) {
       this.proxyAgent = proxyUrl.startsWith('socks')
@@ -30,7 +29,20 @@ class SessionManager {
         : new HttpsProxyAgent(proxyUrl);
       console.log(`[Proxy] 🌐 Railway mode — Proxy: ${proxyUrl.replace(/\/\/.*@/, '//***@')}`);
     } else {
-      console.log('[Proxy] 🏠 Local mode — dùng IP nhà mạng (không cần proxy)');
+      // Check saved proxy config
+      try {
+        const configPath = join(SESSIONS_DIR, 'proxy-config.json');
+        const configData = await readFile(configPath, 'utf-8');
+        const config = JSON.parse(configData);
+        if (config.proxyUrl) {
+          this.proxyAgent = config.proxyUrl.startsWith('socks')
+            ? new SocksProxyAgent(config.proxyUrl)
+            : new HttpsProxyAgent(config.proxyUrl);
+          console.log(`[Proxy] 🌐 Saved proxy: ${config.proxyUrl.replace(/\/\/.*@/, '//***@')}`);
+        }
+      } catch {
+        console.log('[Proxy] 🏠 Local mode — dùng IP nhà mạng (không cần proxy)');
+      }
     }
 
     await this._restoreAllSessions();
@@ -43,6 +55,35 @@ class SessionManager {
       opts.agent = this.proxyAgent;
     }
     return new Zalo(opts);
+  }
+
+  // Runtime proxy management — gọi từ API endpoint
+  async setProxy(proxyUrl) {
+    if (!proxyUrl) return this.clearProxy();
+    this.proxyAgent = proxyUrl.startsWith('socks')
+      ? new SocksProxyAgent(proxyUrl)
+      : new HttpsProxyAgent(proxyUrl);
+    // Lưu vào file config để persist qua restart
+    const configPath = join(SESSIONS_DIR, 'proxy-config.json');
+    await mkdir(SESSIONS_DIR, { recursive: true }).catch(() => {});
+    await writeFile(configPath, JSON.stringify({ proxyUrl }), 'utf-8');
+    console.log(`[Proxy] 🌐 Proxy set: ${proxyUrl.replace(/\/\/.*@/, '//***@')}`);
+    return { success: true, proxy: proxyUrl.replace(/\/\/.*@/, '//***@') };
+  }
+
+  async clearProxy() {
+    this.proxyAgent = null;
+    const configPath = join(SESSIONS_DIR, 'proxy-config.json');
+    await unlink(configPath).catch(() => {});
+    console.log('[Proxy] 🏠 Proxy cleared — using direct IP');
+    return { success: true, proxy: null };
+  }
+
+  getProxyInfo() {
+    return {
+      active: !!this.proxyAgent,
+      mode: this.proxyAgent ? 'proxy' : 'direct'
+    };
   }
 
   // Khởi tạo: restore tất cả sessions đã lưu
