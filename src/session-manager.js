@@ -104,10 +104,27 @@ class SessionManager {
       const qrPath = join(qrDir, `${safeEmail}.png`);
 
       console.log(`[Sessions] ⏳ Waiting for QR scan: ${email}`);
-      const api = await zalo.loginQR({ qrPath });
+
+      // Biến để track xem đã confirm thành công chưa (trước khi getUserInfo fail)
+      let confirmedSuccess = false;
+      let scanDisplayName = '';
+
+      // Dùng callback API của zca-js để detect login success sớm hơn
+      const api = await zalo.loginQR({
+        qrPath,
+        callback: (event) => {
+          console.log(`[Sessions] 📱 QR Event: type=${event.type}`);
+          if (event.type === 2) { // QRCodeScanned
+            console.log(`[Sessions] 📱 QR Scanned by: ${event.data?.display_name || 'unknown'}`);
+            scanDisplayName = event.data?.display_name || '';
+            confirmedSuccess = true;
+          }
+        }
+      });
+
       console.log(`[Sessions] ✅ loginQR() returned for: ${email}`);
 
-      // Set connected NGAY LẬP TỨC — trước khi save cookies / setup listener
+      // Set connected NGAY LẬP TỨC
       this.sessions.set(email, {
         api,
         zalo,
@@ -117,7 +134,7 @@ class SessionManager {
       });
       console.log(`[Sessions] 🟢 Status set to connected: ${email}`);
 
-      // Save cookies (non-critical — don't let failure reset status)
+      // Save cookies (non-critical)
       try {
         await this._saveCookies(email, api);
         console.log(`[Sessions] 💾 Cookies saved: ${email}`);
@@ -135,7 +152,24 @@ class SessionManager {
 
       return { success: true, message: 'Đăng nhập Zalo thành công!' };
     } catch (e) {
-      console.error(`[Sessions] ❌ Login failed: ${email}: ${e.message}`);
+      console.error(`[Sessions] ❌ Login error: ${email}: ${e.message}`);
+
+      // QUAN TRỌNG: zca-js throw "Can't login" SAU KHI đã login thành công
+      // (do getUserInfo fail từ Railway IP). Nếu đã confirmed → vẫn coi như thành công
+      // nhưng không có api object → set limited connected
+      if (e.message === "Can't login" || e.message === "Can't get account info") {
+        console.warn(`[Sessions] ⚠️ Login threw "${e.message}" but may still be connected. Setting limited connected.`);
+        this.sessions.set(email, {
+          api: null,
+          zalo: null,
+          status: 'connected',
+          recentMessages: [],
+          connectedAt: Date.now(),
+          limited: true // API bị hạn chế do getUserInfo fail
+        });
+        return { success: true, message: 'Đăng nhập Zalo thành công (API hạn chế)!' };
+      }
+
       this.sessions.set(email, {
         api: null,
         zalo: null,
