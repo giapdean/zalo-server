@@ -13,6 +13,7 @@ const SESSIONS_DIR = join(__dirname, '..', 'sessions');
 class SessionManager {
   constructor() {
     this.sessions = new Map(); // email → { api, zalo, status, recentMessages }
+    this.loginGenerations = new Map(); // email → number — track login generation to invalidate old processes
   }
 
   // Khởi tạo: restore tất cả sessions đã lưu
@@ -89,6 +90,10 @@ class SessionManager {
   // AUTH
   // ============================================================
   async startLoginQR(email) {
+    // Tăng generation để invalidate login cũ
+    const gen = (this.loginGenerations.get(email) || 0) + 1;
+    this.loginGenerations.set(email, gen);
+
     const existing = this.sessions.get(email);
     if (existing && existing.status === 'connected') {
       return { success: true, message: 'Đã đăng nhập Zalo rồi!' };
@@ -133,6 +138,12 @@ class SessionManager {
 
       console.log(`[Sessions] ✅ loginQR() returned for: ${email}`);
 
+      // Check generation trước khi set connected
+      if (this.loginGenerations.get(email) !== gen) {
+        console.log(`[Sessions] ⚠️ Login generation mismatch for ${email} — discarding result (gen=${gen}, current=${this.loginGenerations.get(email)})`);
+        return { success: false, error: 'Login cancelled (superseded by logout or new login)' };
+      }
+
       this.sessions.set(email, {
         api, zalo, status: 'connected',
         recentMessages: [], connectedAt: Date.now()
@@ -158,6 +169,12 @@ class SessionManager {
             recentMessages: [], connectedAt: Date.now()
           });
           console.log(`[Sessions] 🟢 Retry login SUCCESS for: ${email}`);
+
+          // Check generation trước khi set connected
+          if (this.loginGenerations.get(email) !== gen) {
+            console.log(`[Sessions] ⚠️ Retry login generation mismatch — discarding`);
+            return { success: false, error: 'Login cancelled' };
+          }
 
           // Save credentials for future restores
           const cookiePath = this._getSessionPath(email);
@@ -478,6 +495,9 @@ class SessionManager {
   }
 
   async logout(email) {
+    // Invalidate mọi login đang chạy
+    this.loginGenerations.set(email, (this.loginGenerations.get(email) || 0) + 1);
+
     const session = this.sessions.get(email);
     if (session?.api?.listener) session.api.listener.stop();
     this.sessions.delete(email);
